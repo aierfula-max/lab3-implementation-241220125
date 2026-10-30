@@ -683,12 +683,13 @@ CHK-16 & 报告数字是否可回溯、是否无编造 & 通过 & 行数/覆盖�
 
 \subsection{环境与构建}
 
-运行环境是 Ubuntu 24.04、Python 3.12.3、Tk 8.6、SQLite 3.45.1。运行时没有第三方依赖；开发工具只有 pytest 9.1.1、pytest-cov 与 ruff 0.17.3。构建就是“建虚拟环境、装开发工具、直接运行”，没有编译步骤：
+运行环境是 Ubuntu 24.04、Python 3.12.3、Tk 8.6、SQLite 3.45.1。运行时没有第三方依赖；开发工具只有 pytest 9.1.1、pytest-cov 与 ruff 0.17.3。Python 没有单独的编译步骤，构建就是“建虚拟环境、装开发工具、做一次字节码编译检查、直接运行”：
 
 \begin{lstlisting}[language=bash,basicstyle=\ttfamily\footnotesize,frame=single,rulecolor=\color{line},backgroundcolor=\color{paper}]
 $ cd code
 $ python -m venv .venv && . .venv/bin/activate
 $ pip install -e ".[dev]"
+$ python -m compileall -q qiju && echo "compile ok"
 $ python run.py --db ./qiju.db          # 启动桌面端
 $ python -m qiju.cli demo               # 无界面跑主流程
 $ python -m pytest                      # 97 passed
