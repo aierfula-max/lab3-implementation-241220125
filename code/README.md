@@ -13,7 +13,7 @@ python -m venv .venv && source .venv/bin/activate   # 可选
 python run.py                    # 默认库 ~/.qiju/qiju.db，首次启动自动写入演示数据
 python run.py --db ./qiju.db     # 指定数据库
 python -m qiju.cli demo          # 无界面跑一遍主流程（内存库）
-python -m pytest -q              # 91 个测试
+python -m pytest -q              # 97 个测试
 ruff check qiju tests run.py     # 代码风格
 ```
 
@@ -77,8 +77,8 @@ qiju/
 ## 测试
 
 ```
-91 passed
-核心层（domain + application + infrastructure，排除 seed）覆盖率 80%
+97 passed
+核心层（domain + application + infrastructure，排除 seed）覆盖率 84%
 UI 层没有自动化测试，由 scripts/capture_ui.py 逐页冒烟截图
 ```
 
