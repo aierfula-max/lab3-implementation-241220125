@@ -189,7 +189,7 @@
 \small
 \begin{enumerate}[leftmargin=1.4em,itemsep=2pt,topsep=1pt]
   \item 实验二的 UML 怎么落到代码？类、状态、事务分别落在哪个文件，最后有多少行？
-  \item 大模型在实现里做了什么、错在哪里、我怎么发现并改掉？哪些事我不敢交给它？
+  \item 大模型在实现里做了什么、错在哪里、通过什么检查发现并修正？哪些环节不能交给它？
   \item 程序怎么编译、怎么跑？主流程、异常分支、并发抢房的实际结果是什么？
   \item Git 本地与远程仓库怎么组织？提交粒度、返工和交付校验能不能追溯？
 \end{enumerate}
@@ -223,17 +223,37 @@
 % ==================== 1 实现路线 ====================
 \section{从 UML 到代码}
 
-\subsection{先说服自己：为什么是 Python + Tkinter + SQLite}
+\subsection{技术选型：约束、候选方案与取舍}
 
-实验二交完的那天晚上，我把 11 张图摊在屏幕上，觉得实现只是“把图翻译成代码”。真正开始写的第一天就发现不是。类图能表达“订单有每晚明细”，但表达不了“扣库存这一下必须是原子的”；状态图能画出 7 个状态，但画不出“确认请求和超时任务同时到达时谁赢”。这些是写 \code{UPDATE} 时才会冒出来的问题，必须在代码里重新想一遍。
+实验二的设计是 Web 三端（浏览器 + PostgreSQL + Redis + 对象存储），实验三要求在课程周期内交付一个可运行、可测试的桌面程序，并为实验四的静态分析与测试留出接口。落地前先确定四条约束：
 
-三个技术选择都是围绕“后面还要被分析和测试”做的：
+\begin{enumerate}[leftmargin=1.6em,itemsep=1pt,topsep=2pt]
+  \item 运行时不得依赖需要额外部署的服务，助教机器可以直接启动；
+  \item 领域规则（金额、库存、状态机、退款口径）必须能脱离界面和数据库单独测试；
+  \item 必须支持事务、唯一约束和并发控制，否则无法验证 REQ-008/024/029；
+  \item 界面要覆盖三类角色和主要异常态，但不追求视觉复杂度。
+\end{enumerate}
 
-\begin{itemize}[leftmargin=1.6em,itemsep=2pt,topsep=2pt]
-  \item \textbf{Python 3.12}。实验二的设计是 Web 三端，Java + Spring 更贴原设计；但实验三只有四周，实验四还要对自己的程序做分析与测试。Python 把领域规则写成纯函数，pytest 一秒内跑完 97 个用例，改一行就能验证；如果换成 Java，Maven、Swing 布局和 Mock 会吃掉一半时间，而我想把时间花在并发和状态机上。
-  \item \textbf{Tkinter}。它不好看，这是事实。但它是标准库，实验室机器不用装任何东西，10 屏界面够用。为了不让截图显得像上世纪软件，我统一了墨绿/沙色、四档字号，把 Treeview 的表头、行高和选中色重画了一遍。
-  \item \textbf{SQLite}。看中的是事务、唯一约束、\code{CHECK} 和单文件。代价是单写者：桌面进程里我用“单连接 + 可重入锁 + \code{BEGIN IMMEDIATE}”把写操作串行化，语义上等价于整库行锁，但它扛不了 50 个真实并发用户。这一点在 7.2 节写清楚了，我没有把它说成“高并发”。
-\end{itemize}
+按这四条约束比较候选方案，结果见表 \ref{tab:tech}。
+
+\begin{table}[H]
+\centering
+\caption{技术选型的候选方案与决策依据}
+\label{tab:tech}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}p{1.3cm}p{3.3cm}p{2.7cm}Xp{3.2cm}@{}}
+\toprule
+决策点 & 候选方案 & 采用 & 依据 & 代价与缓解 \\
+\midrule
+语言 & Python 3.12 / Java 17 / C++17 & Python 3.12 & 领域规则可写成纯函数；pytest 单次运行低于 1 秒；与实验四的分析工具衔接成本低 & GIL 限制真并行；并发正确性用线程池与数据库约束验证，吞吐另行压测 \\
+界面 & Tkinter / PySide6 / Web 前端 & Tkinter & 标准库，零安装；10 屏界面与三类角色足够 & 控件外观与自动化测试能力弱；统一主题，截图冒烟 \\
+存储 & SQLite / PostgreSQL / 内存仓储 & SQLite & 事务、唯一约束、\code{CHECK}、单文件，满足 REQ-028 & 单写者；用单连接 + 可重入锁 + \code{BEGIN IMMEDIATE} 串行化，不宣称高吞吐 \\
+并发控制 & 先查后扣 / 应用层锁 / 条件 \code{UPDATE} & 条件 \code{UPDATE} + 事务 & 一条语句完成“判断 + 占用”，失败返回 0 行；换库后语义不变 & 依赖数据库的更新语义；用 50 线程用例验证 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+选 Python 而不是 Java/C++ 的主要依据是验证成本：本实验的难点在状态机、逐晚扣减和退款口径，不在构建系统；Java 的 Maven/Swing 与 C++ 的 CMake/Qt 会把相当一部分时间耗在环境与样板代码上。选 SQLite 是因为它原生支持本实验需要的事务与约束，代价是单写者，这一点在 7.2 节作为已知限制列出，不把线程池测试的结果当作吞吐结论。界面选 Tkinter 是同样的思路：先保证 10 屏能操作、能截图、能复现，再谈外观。
 
 \subsection{工程结构}
 
@@ -262,7 +282,7 @@
 
 \subsection{类图到代码的映射}
 
-表 \ref{tab:mapping} 是交付时逐项对的：左边是实验二类图里的元素，右边是最终代码位置。写这张表的时候我发现两处“图上没有、代码必须有”的东西：\code{DailyInventory} 的 \code{stop_sale} 字段（停售最终要落到某一天的可订性上）和 \code{Order.confirm_deadline}（确认时限必须在创建时快照）。它们已经回写进图 3-1、3-2。
+表 \ref{tab:mapping} 将实验二类图中的元素逐项映射到代码位置。映射过程中补充了两个类图未显式给出、但实现必须落地的字段：\code{DailyInventory} 的 \code{stop_sale}（停售最终要落到某一天的可订性上）和 \code{Order.confirm_deadline}（确认时限必须在创建时快照）。两处均已回写进图 3-1、3-2。
 
 \begin{table}[H]
 \centering
@@ -293,7 +313,7 @@ OrderStatus / 状态机 & \code{domain/order_state.py} & 129 & 7 条转换 + 角
 
 \subsection{与实验二设计的差异}
 
-实验二说明书里我写过“设计不强制等于实现”。真正做完，差异有七处，都是实现逼出来的：
+相对实验二的设计，实现阶段发生七处修订。每处都对应一个具体的实现约束，而不是风格调整：
 
 \begin{enumerate}[leftmargin=1.6em,itemsep=2pt,topsep=2pt]
   \item \textbf{状态转换是 7 条，不是 8 条。}实验二报告写“8 条允许转换”，实现时按 \req{REQ-017} 表 3 逐行数只有 7 行。多出来的一条是把“顾客取消”和“超时取消”当成了两条转换，它们的目标状态、守卫和库存影响完全相同，只是触发者不同。代码里一条转换带多个 \code{actors} 就能表达，测试也按 7 条写。
@@ -307,7 +327,7 @@ OrderStatus / 状态机 & \code{domain/order_state.py} & 129 & 7 条转换 + 角
 
 \subsection{实现版 UML}
 
-实现过程中我把实验二的图回写了一遍：类图补了 \code{confirm_deadline}、\code{pending_profile}，状态图把“8 条”改成 7 条，组件图和部署图按桌面单机重画。图 \ref{fig:uml-class-basic} 到图 \ref{fig:uml-deploy} 是最终版；源文件与 PNG 在 \code{UML/} 下，改图后重新跑 \code{java -jar plantuml.jar -tpng} 即可。
+实现完成后，UML 已按代码回写：类图补 \code{confirm_deadline}、\code{pending_profile}，状态图由“8 条”改为 7 条，组件图与部署图按桌面单机重画。图 \ref{fig:uml-class-basic} 到图 \ref{fig:uml-deploy} 是最终版；源文件与 PNG 在 \code{UML/} 下，改图后重新跑 \code{java -jar plantuml.jar -tpng} 即可。
 
 \begin{figure}[H]
 \centering
@@ -340,7 +360,7 @@ OrderStatus / 状态机 & \code{domain/order_state.py} & 129 & 7 条转换 + 角
 
 \subsection{金额与日期：把“差不多”变成“一定”}
 
-金额只用整数分，是从实验一就被反复强调的约束（\req{REQ-032}）。实现时我把它变成两条硬规则：实体和表里没有任何 \code{float}；用户输入的“元”只在界面边界转一次分。解析用 \code{Decimal}，并显式检查小数位，避免 \code{19.99 * 100 = 1998.9999...}。
+金额只用整数分，是 \req{REQ-032} 的硬约束。实现将其落实为两条规则：实体和表里没有任何 \code{float}；用户输入的“元”只在界面边界转一次分。解析用 \code{Decimal}，并显式检查小数位，避免 \code{19.99 * 100 = 1998.9999...}。
 
 \begin{lstlisting}[style=py]
 def parse_yuan(text: str) -> int:
@@ -356,7 +376,7 @@ def parse_yuan(text: str) -> int:
 
 \subsection{逐晚扣减：一条带条件的 UPDATE}
 
-这是整个实现里最不能错的一段。REQ-008 要求“任一晚不足则整单失败”，REQ-029 要求“50 并发抢 1 间只能成功 1 个”。我一开始也写过“先查剩余、再更新”，写完立刻删了：两个请求都读到 1 间、都判断够、都扣，库存就成负数了。最终只保留一条条件 \code{UPDATE}：
+该用例的难点是“校验 + 扣减”的原子性。若按“先查剩余、再更新”实现，两个并发请求可能同时读到 1 间、同时判定充足、同时扣减，库存变为 $-1$；若失败分支只返回 \code{False} 而不整体回滚，前几晚的扣减会残留，而订单并未创建。\req{REQ-008} 要求任一晚不足则整单失败，\req{REQ-029} 要求 50 并发抢 1 间只成功 1 个，因此实现只保留一条带条件的 \code{UPDATE}：
 
 \begin{lstlisting}[style=py]
 def hold(self, room_type_id: str, day: date, count: int) -> bool:
@@ -379,7 +399,7 @@ def hold(self, room_type_id: str, day: date, count: int) -> bool:
 
 \subsection{状态机：一张表管住 7 个状态}
 
-状态机写成表，而不是一串 \code{if}。每条转换带四样东西：目标状态、允许的角色、是否必须写原因、对库存的影响。服务层只做守卫（库存复核、入住日、18:00），能不能转、谁能转由表回答。
+若把状态转换写成散落的 \code{if} 与字符串比较，新增状态时容易漏改分支，也无法在测试中枚举全部允许/禁止转换。因此状态机写成表：每条转换带目标状态、允许的角色、是否必须写原因、对库存的影响四样信息。服务层只做守卫（库存复核、入住日、18:00），能不能转、谁能转由表回答。
 
 \begin{table}[H]
 \centering
@@ -421,7 +441,7 @@ def hold(self, room_type_id: str, day: date, count: int) -> bool:
 
 \subsection{幂等与重复下单：唯一键 + 二次确认}
 
-\req{REQ-024} 有两层：同一 \code{request_id} 重放返回原单；不同 \code{request_id} 但 2 分钟内内容相同，要先提示、顾客确认后才建新单。实现分三层：
+\req{REQ-024} 有两层约束：同一 \code{request_id} 重放返回原单；不同 \code{request_id} 但 2 分钟内内容相同，要先提示、顾客确认后才建新单。仅在业务层做“先查后插”无法覆盖并发重放，因此实现分三层：
 
 \begin{itemize}[leftmargin=1.6em,itemsep=1pt,topsep=2pt]
   \item 数据库层：\code{UNIQUE(user_id, request_id)}，并发重放最终只有一条能插入；
@@ -440,7 +460,7 @@ def hold(self, room_type_id: str, day: date, count: int) -> bool:
 
 \subsection{退款三口径：18:00、未入住、提前退房}
 
-退款金额由 \code{cancellation.py} 里的三个纯函数算，服务层只负责释放库存和写退款记录。以“3 晚、每晚 300 元”为例：
+三个退款场景的时间边界与库存释放范围不同；若共用一套“取消即全退”的逻辑，会把首晚扣费和未住间夜算错。因此退款金额由 \code{cancellation.py} 的三个纯函数分别计算，服务层只负责释放库存和写退款记录。以“3 晚、每晚 300 元”为例：
 
 \begin{table}[H]
 \centering
@@ -466,7 +486,7 @@ def hold(self, room_type_id: str, day: date, count: int) -> bool:
 
 \req{REQ-018} 的 8 项指标里，“计费间夜”最容易写错。它不等于“所有订单的间夜”：已确认/已入住/已完成算全部入住间夜；未入住关闭只算首晚；18:00 后取消只算首晚；已拒绝、免费取消不算。停售日的可售间夜计 0。
 
-我把口径拆成三个函数：\code{_billable_days}、\code{_stayed_days}、\code{_sellable_nights}，报表按日聚合后再求和。这样“某一天为什么是 2 间夜”可以直接指着函数说，不用在一大段 SQL 里找。退款按退款记录的创建时间归属，净成交 = 成交金额 $-$ 退款金额；除数为 0 时界面显示“—”，不抛 \code{ZeroDivisionError}。
+口径实现拆为三个函数：\code{_billable_days}、\code{_stayed_days}、\code{_sellable_nights}，报表按日聚合后再求和。拆分的目的不是“代码短”，而是让每个数字都能对应到一条需求定义；按日核对时不需要在一段聚合 SQL 里反推口径。退款按退款记录的创建时间归属，净成交 = 成交金额 $-$ 退款金额；除数为 0 时界面显示“—”，不抛 \code{ZeroDivisionError}。
 
 \begin{lstlisting}[style=py]
 if order.status in (CONFIRMED, CHECKED_IN, COMPLETED):
@@ -560,29 +580,29 @@ All checks passed!
 
 \subsection{一次自查：把“看起来对”改成“算得对”}
 
-交付前我按 \code{chat.txt} 的 CHK 清单逐项过，发现两处不是“代码错了”，而是“口径错了”：
+按 \code{chat.txt} 的 CHK 清单逐项核查，发现两处不是代码语法错误，而是统计或对账口径与需求不一致：
 
 \begin{itemize}[leftmargin=1.6em,itemsep=1pt,topsep=2pt]
   \item 报表最初把 no-show 订单的全部间夜计入成交额，导致 2 晚 596 元的 no-show 订单报表显示 596 元成交，而 \req{REQ-018} 只允许首晚 298 元。改成 \code{_billable_days} 后，测试里的 3 晚 900 元 no-show 只计 300 元。
   \item 对账最初把提前退房释放的间夜算成“应占用”，出现 1 条假差异。修正后，\code{test_scheduler.py} 里的对账用例 只有在真正多扣库存时才会报差异。
 \end{itemize}
 
-这两处都不是语法错误，静态检查也抓不到；只能靠“拿需求表逐项对 + 用具体数字手算”发现。这也是我后来越来越依赖测试的原因：它逼我把“我觉得”写成“我断言”。
+两处都不是语法错误，\code{ruff} 与类型注解均无法发现；定位方式是把 \req{REQ-018} 的口径逐条抄成期望值，再用固定数字的用例对拍。修复后，两处都补了断言具体金额的回归用例，避免后续改动再次偏离口径。
 
 % ==================== 4 大模型辅助 ====================
 \section{大模型辅助实现的过程与反思}
 
-\subsection{使用原则：让 AI 写“可被检查的代码”}
+\subsection{使用约束：让生成结果可被检查}
 
-实验三明确要求用大模型辅助开发，但也要求“阅读并检查每一行即将应用的代码”。我给自己定了三条规矩：
+实验三要求使用大模型辅助开发，同时要求逐行检查即将应用的代码。为避免把生成结果直接当成实现，使用过程设定三条约束：
 
 \begin{enumerate}[leftmargin=1.6em,itemsep=2pt,topsep=2pt]
-  \item \textbf{先写规约，再让它写实现。}每次不是直接说“写一个下单服务”，而是先给出输入、输出、异常、事务边界和验收用例，再让它填。比如库存扣减，我会写“任一晚失败必须整单回滚；并发下 stock 不得为负；用条件 UPDATE，不许先查后扣”。
-  \item \textbf{一次只让它做一件事。}先生成实体和 schema，确认字段与约束；再生成仓储；最后生成服务。一次生成 800 行，看起来快，实际 review 成本更高。
-  \item \textbf{它给的每一段 SQL、每一个边界条件，都要有测试。}AI 最容易在“<= 还是 <”“释放全部还是释放之后”“事务里还是事务外”这三类地方出错，而这些恰好都能写成断言。
+  \item \textbf{先给规约，再生成实现。}提示词必须包含输入、输出、异常、事务边界和验收用例，而不是只说“写一个下单服务”。例如库存扣减的规约是：“任一晚失败必须整单回滚；并发下库存不得为负；用条件 \code{UPDATE}，不允许先查后扣。”
+  \item \textbf{按依赖顺序分批生成。}先生成实体与 schema，核对字段和约束；再生成仓储；最后生成服务。单次生成控制在可审查的规模，避免一次生成数百行后无法逐行定位问题。
+  \item \textbf{每个边界条件都要有测试。}模型最容易在“\code{<=} 还是 \code{<}”“释放全部还是释放之后”“事务里还是事务外”三类地方出错，这三类都可以写成固定时钟或固定数字的断言。
 \end{enumerate}
 
-完整记录在 \code{chat.txt}，按 \code{AI-01}～\code{AI-10} 编号、逐行编号；本节引用行号，例如 \code{AI-03-L008}。
+完整记录在 \code{chat.txt}，按 \code{AI-01}～\code{AI-10} 编号、逐行记录；本节引用行号，例如 \code{AI-03-L008}。
 
 \subsection{十次使用记录汇总}
 
@@ -593,7 +613,7 @@ All checks passed!
 \footnotesize
 \begin{tabularx}{\textwidth}{@{}p{0.85cm}p{2.8cm}p{3.7cm}p{4.2cm}p{3.0cm}@{}}
 \toprule
-编号 & 场景 & 生成结果 & 主要问题 & 人工修订 \\
+编号 & 场景 & 生成结果 & 主要问题 & 修订 \\
 \midrule
 AI-01 & 工程骨架 & 12 个平铺文件，服务里拼 SQL & 无分层、不可测 & 四层 + 仓储门面 \\
 AI-02 & 实体与建表 & 金额 float、明细存 JSON & 违反 REQ-032/028 & 整数分、独立明细表、唯一约束 \\
@@ -604,36 +624,36 @@ AI-06 & 幂等 & 用 order\_no；窗口 2 小时 & 键错、无唯一约束 & (u
 AI-07 & 报表 & 总价求和当成交额 & 8 项口径全偏 & 三个口径函数 + 手算对拍 \\
 AI-08 & Tkinter & 单文件 900 行、正数字号 & 列被压缩、DPI 失控 & 拆 8 文件、负数字号、after 定时 \\
 AI-09 & 测试 & 10 线程、共用 request\_id & 测不到并发、断言太弱 & 50 线程、独立键、断言库存 \\
-AI-10 & 报告润色 & 编造“日均 10 万单” & 数字不可回溯 & 删除，改为命令输出 \\
+AI-10 & 交付材料核查 & 生成无依据指标 & 数字不可回溯 & 删除，改为命令输出 \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-\subsection{四个典型翻车案例}
+\subsection{四个典型缺陷与修订}
 
-\subsubsection{库存：它给的是“先查后扣”}
+\subsubsection{库存：先查后扣导致的竞态}
 
-第一版生成的是 \code{SELECT remaining} → \code{if remaining >= n} → \code{UPDATE sold = sold + n}（\code{AI-03-L004}～\code{L006}）。这段代码在单线程演示里永远是对的，所以我差点留下。后来写到并发测试才反应过来：两个线程同时读到 1 间，都判断“够”，都扣，最后 \code{sold=2}、\code{total=1}。更隐蔽的是失败分支只 \code{return False}，前两晚的扣减已经提交，订单却没创建。
+初版生成的是 \code{SELECT remaining} → \code{if remaining >= n} → \code{UPDATE sold = sold + n}（\code{AI-03-L004}～\code{L006}）。该实现在单线程路径下结果总是正确：查询与更新之间没有其他写者，因此很难在手工演示中暴露。并发请求下则存在 TOCTOU 窗口：两个线程都读到 1 间、都判断充足、都执行扣减，最终 \code{sold=2}、\code{total=1}。此外，失败分支只 \code{return False}，前两晚的扣减已经提交，订单却没有创建。
 
-改成条件 \code{UPDATE} 后，逻辑从“查询—判断—写入”三步变成一步，“够不够”由数据库在更新时判断。这个改动的价值不在于 SQL 写法，而在于把并发正确性从“调用方记得加锁”变成“语句本身不可能超卖”。
+修订为带条件的 \code{UPDATE} 后，“查询—判断—写入”合并为一条语句，“是否充足”由数据库在更新时判断，0 行即售罄。该改动的关键不是 SQL 写法，而是把并发正确性从“调用方记得加锁”转移到“语句本身不可超卖”。
 
-\subsubsection{状态机：它按“业务常识”补了一条非法转换}
+\subsubsection{状态机：按“业务常识”补出的非法转换}
 
-生成的表里有 \code{COMPLETED -> CANCELED}，理由是“客人投诉可以撤销”（\code{AI-04-L003}）。这条在业务讨论里听起来合理，但 \req{REQ-017} 表 4 明确禁止：已完成是终态，取消会破坏收入和库存统计。它还漏了 \code{NO_SHOW}，并且所有转换都没有守卫和角色。
+生成的转换表包含 \code{COMPLETED -> CANCELED}，理由为“客人投诉可以撤销”（\code{AI-04-L003}）。该转换在一般业务讨论中成立，但 \req{REQ-017} 表 4 明确禁止：已完成是终态，取消会破坏收入与库存统计。初版还漏了 \code{NO_SHOW}，且所有转换都没有守卫和角色约束。
 
-我按需求表重写了 7 条，每条补 \code{actors}、\code{reason_required}、\code{inventory_effect}，再用 \code{ensure_actor} 同时校验“状态”和“角色”。这件事让我记住：AI 的“业务常识”来自它见过的系统，不是来自本项目的需求约定；终态、非法转换、角色矩阵这三类，必须人对着需求表逐行核。
+修订依据是 \req{REQ-017} 表 3：按表重写 7 条转换，每条补 \code{actors}、\code{reason_required}、\code{inventory_effect}，再由 \code{ensure_actor} 同时校验状态与角色。由此得到的结论是：模型给出的“业务常识”来自常见系统，不等于本项目的需求约定；终态、非法转换、角色矩阵三类必须对照需求表逐行核验。
 
-\subsubsection{退款：18:00 的边界错了 1 秒}
+\subsubsection{退款：18:00 边界差 1 秒}
 
-生成的是 \code{if now.hour < 18: free}（\code{AI-05-L004}）。这会把 18:00:00 判成收费，而 \req{REQ-012} 写的是“18:00:00 及之前免费，18:00:01 起收费”。1 秒的差别，在真实系统里就是一次客诉。
+生成的条件是 \code{if now.hour < 18: free}（\code{AI-05-L004}）。该条件会把 18:00:00 判为收费，而 \req{REQ-012} 规定“18:00:00 及之前免费，18:00:01 起收费”。在真实系统中，这 1 秒的差异会直接改变扣费结果。
 
-我改成 \code{now <= datetime.combine(check_in, time(18, 0))}，并把测试钉在 17:59:59、18:00:00、18:00:01 三个时刻。另一个错误是 no-show “全额退款、释放全部库存”；实际是首晚照收、只释放入住日之后。这两个错误都不是“代码写得丑”，而是“规则理解错”，只能靠把需求原文贴在旁边逐字对。
+修订为 \code{now <= datetime.combine(check_in, time(18, 0))}，并将测试固定在 17:59:59、18:00:00、18:00:01 三个时刻。同一处生成结果还把 no-show 写成“全额退款、释放全部库存”，与 \req{REQ-025} 的“首晚照收、只释放入住日之后”不符。两处均属于规则理解错误而非语法错误，修订依据是需求原文，修订后的行为由固定时钟用例覆盖。
 
-\subsubsection{界面：字号和列宽把布局搞崩了}
+\subsubsection{界面：字号与 Grid 请求宽度}
 
-Tkinter 的正数字号是“磅”，在 X11/HiDPI 下同一份代码在 96 dpi 和 192 dpi 上能差一倍；我第一版截图里 10 pt 正文实际渲染成 39 px 行高，表格列全被挤扁。改成负数字号（像素）后，截图和真机一致。
+Tkinter 的正数字号按“磅”解释，在 X11/HiDPI 下 10 pt 在 96 dpi 与 192 dpi 上可相差约一倍；初版在截图环境中实际渲染为 39 px 行高，表格列被挤压。修订为负数字号（像素）后，截图与真机表现一致。
 
-另一个坑是 \code{pack_propagate(False)}：我为了让卡片不被表格撑大，把它加在表格卡片的 \code{body} 上，结果卡片的请求宽度变成 3 px，Grid 把 3/5 的空间全给了右侧详情栏，表格列被压到 433 px。删掉这行、给 Treeview 列加 \code{minwidth} 和横向滚动条后，1440 宽下 7 列才完整。这两个问题都不是“AI 不会写界面”，而是“Tk 的布局/字体模型要在真实屏幕上跑一遍才知道”。
+另一个问题是 \code{pack_propagate(False)}：初版为避免卡片被表格撑大，将其加在表格卡片的 \code{body} 上，导致卡片的请求宽度变为 3 px，Grid 将 3/5 的空间分给右侧详情栏，表格列被压到 433 px。修订方式是删除该行，并给 Treeview 列设置 \code{minwidth} 与横向滚动条；1440 宽下 7 列可完整显示。两处问题在静态检查中都不可见，必须在真实窗口与目标 DPI 下运行后才能发现。
 
 \subsection{人工审查清单}
 
@@ -666,17 +686,17 @@ CHK-16 & 报告数字是否可回溯、是否无编造 & 通过 & 行数/覆盖�
 \end{tabularx}
 \end{table}
 
-\subsection{哪些环节真的省时间，哪些不能交}
+\subsection{适用边界：可辅助与不可辅助的环节}
 
-\textbf{省时间的：}（1） 样板代码，比如 dataclass、SQL 建表、CRUD 仓储、Tkinter 的 grid/pack 骨架；（2） 命名和文案，类名、错误提示、按钮文案，它给的比我翻词典快；（3） 检查清单，问“对照 REQ-017 还缺什么”，它能列出漏掉的 NO\_SHOW、超时、幂等点，虽然不保证全对，但比空白页强；（4） 测试骨架，fixture、参数化、断言结构，省掉大量重复。
+\textbf{可辅助的环节：}（1）样板代码，例如 dataclass、SQL 建表、CRUD 仓储、Tkinter 的 grid/pack 骨架，可减少重复劳动；（2）命名与文案，例如类名、错误提示、按钮文案，可降低查文档与措辞成本；（3）缺口检查，例如按 \req{REQ-017} 询问还缺哪些状态或守卫，可列出 \code{NO_SHOW}、超时、幂等等待补项，但结果需要人工复核；（4）测试骨架，例如 fixture、参数化、断言结构，可复用固定模式。
 
-\textbf{不能交的：}（1） 业务规则的边界（18:00、24:00、首晚、释放范围）；（2） 并发与事务方案（先查后扣、锁的粒度、回滚）；（3） 状态机的允许/禁止转换；（4） 金额与日期口径；（5） 任何要写进报告的数字。判断标准很简单：\emph{这条错了，系统会不会在真实场景里出错？}会，就人来定，AI 只做实现。
+\textbf{不可辅助的环节：}（1）业务规则的边界（18:00、24:00、首晚、释放范围）；（2）并发与事务方案（先查后扣、锁粒度、回滚）；（3）状态机的允许/禁止转换；（4）金额与日期口径；（5）所有要写进报告的数字。判断标准是：\emph{该内容一旦错误，系统是否会在真实场景中产生错误结果？}若会，则必须由人定义并由测试验证。
 
-\subsection{体会}
+\subsection{小结}
 
-这次最大的变化不是“写得更快”，而是“review 的方式变了”。以前我看 AI 代码主要看能不能跑；现在我优先看三件事：SQL 有没有把条件写进 \code{WHERE}、状态转换有没有对需求表、金额和日期有没有用错类型。这三件事一旦对了，剩下的命名和格式反而是小事。
+本次实现中，模型生成代码的主要风险不是语法错误，而是“在常见场景下正确、在需求边界上错误”。库存的先查后扣、状态机的非法转换、18:00 的 1 秒偏差、Tk 的 DPI 与 Grid 行为，都属于单线程或常规分辨率下不易暴露的问题。
 
-另一个体会是：AI 很擅长把“错的东西写得很整齐”。一张排版漂亮的类图、一段缩进完美的 \code{SELECT} + \code{UPDATE}，比手写的乱代码更危险，因为它看起来可信。人最有价值的工作不是改语法，而是守住那几条不能错的规则，并且用测试把它们钉住。
+因此审查重点从“能否运行”转为三项可验证的检查：SQL 的条件是否写入 \code{WHERE}、状态转换是否逐条对上需求表、金额与日期是否使用正确类型与边界。三项通过后，命名与格式的优先级较低；三项不通过，即使代码排版整齐也不能采用。
 
 % ==================== 5 编译、运行与结果 ====================
 \section{编译、运行与结果}
@@ -737,7 +757,7 @@ $ ruff check qiju tests run.py          # All checks passed!
 
 \subsection{走查场景与结果}
 
-除了命令行，我还按 \req{REQ-017}、\req{REQ-029} 的验收方法在测试里跑了下面这些场景。表 \ref{tab:walkthrough} 的“实际结果”都来自测试断言，不是手填的：
+除命令行演示外，按 \req{REQ-017}、\req{REQ-029} 的验收方法执行表 \ref{tab:walkthrough} 中的场景。“实际结果”均来自测试断言，不是手工填写：
 
 \begin{table}[H]
 \centering
@@ -792,7 +812,7 @@ $ python -m pytest
 \end{tabularx}
 \end{table}
 
-界面层没有自动化测试，这是有意取舍：Tkinter 的控件断言成本高、收益低，我把有限的时间放在“金额/库存/状态”这些错了会出事的规则上。界面用 \code{scripts/capture_ui.py} 逐页打开、逐页截图，至少保证 10 屏不会在运行时抛异常；但“按钮点下去之后的交互”没有回归测试，写在不足里。
+界面层没有自动化测试，是有意的测试范围取舍：Tkinter 控件断言成本高、收益低，测试资源优先投入金额、库存、状态等高风险规则。界面用 \code{scripts/capture_ui.py} 逐页打开并截图，保证 10 屏在运行时不抛异常；但按钮交互没有回归测试，列入 7.2 的不足。
 
 \subsection{界面截图}
 
@@ -846,9 +866,9 @@ $ python -m pytest
 \label{fig:ui-logs}
 \end{figure}
 
-\subsection{运行时才发现的问题}
+\subsection{运行时验证发现的问题}
 
-有三个问题在静态检查里完全看不出来，只有真正启动窗口、拖动列宽、切换页面才暴露：
+以下三个问题在静态检查中不可见，只有在真实窗口、目标 DPI 与页面切换时才会暴露：
 
 \begin{enumerate}[leftmargin=1.6em,itemsep=2pt,topsep=2pt]
   \item \textbf{字号单位。}Tk 的正数字号是“磅”，在 HiDPI 下 \code{10} 能渲染成 39 px 行高，表格列全被挤扁；改成负数字号（像素）后，截图和真机一致。
@@ -900,13 +920,13 @@ $ python -m pytest
 \end{tabularx}
 \end{table}
 
-\subsection{两次返工}
+\subsection{两处设计修订}
 
-\textbf{第一次是状态转换的条数。}实验二我写“8 条允许转换”，代码写到一半按 \req{REQ-017} 表 3 逐行数，只有 7 行。多出来的是“顾客取消”和“超时取消”，它们目标状态相同、守卫相同，只是触发者不同。我把它们合并成一条带多个 \code{actors} 的转换，同时在报告里把“8 条”改成“7 条”，并在 4.3 节记下这个口误。这个返工没有改多少代码，但改了设计文档和测试的断言数量。
+\textbf{修订一：状态转换条数。}问题：实验二报告写“8 条允许转换”，按 \req{REQ-017} 表 3 逐行核对只有 7 行；多出的一条把“顾客取消”与“超时取消”当成两种转换，二者目标状态、守卫和库存影响相同，仅触发者不同。分析：若保留两条，状态表与测试数量会与需求不一致，且容易在后续维护中漏改其中一条。处理：合并为一条带多个 \code{actors} 的转换，UML 与报告同步改为 7 条，测试按 7 条断言。
 
-\textbf{第二次是确认时限的快照。}调度器最初用“当前时刻 $-$ 当前 policy”反推截止时间，写“改配置只影响新订单”的测试时，旧订单被新 policy 提前取消了。修复要改三处：订单加 \code{confirm_deadline} 字段、下单时写入、调度器只比较这个字段。改完后，管理员把时限从 30 分钟改成 60 分钟，旧订单仍按 30 分钟超时，新订单按 60 分钟，测试才通过。
+\textbf{修订二：确认时限快照。}问题：初版调度器用“当前时刻 $-$ 当前 policy”反推截止时间。分析：该实现使配置变更追溯影响存量订单，违反 \req{REQ-010}“配置变更只影响新订单”。处理：订单新增 \code{confirm_deadline}，下单时写入；调度器只比较该字段。验证：管理员把时限从 30 分钟改为 60 分钟后，旧订单仍按 30 分钟超时，新订单按 60 分钟，用例通过。
 
-这两次返工都不是“代码写错了重写”，而是“实现逼着设计补细节”。我把它们写进报告，是因为它们比顺利的部分更能说明“UML 到代码”到底难在哪。
+两处修订均不是语法错误，而是实现阶段暴露的设计缺口；处理方式为回写 UML、合并转换或补字段，并补相应断言。它们说明“UML 到代码”的主要风险在语义一致性，而不在编码本身。
 
 \subsection{交付校验}
 
@@ -917,13 +937,13 @@ $ python -m pytest
 \caption{交付文件校验值}
 \label{tab:sha}
 \small
-\begin{tabularx}{\textwidth}{@{}p{5.1cm}X@{}}
+\begin{tabularx}{\textwidth}{@{}p{4.4cm}p{5.5cm}p{5.5cm}@{}}
 \toprule
-文件 & SHA-256 \\
+文件 & SHA-256（前 32 位） & SHA-256（后 32 位） \\
 \midrule
-\code{chat.txt} & \makecell[l]{\texttt{\scriptsize f2cc8bc589c0ff2b1d557d5a064ee0a6}\\\texttt{\scriptsize a2aa39a69d3bd9fdd0d092ae78bcfeee}} \\
-\code{UML/*.puml}（7 个） & \makecell[l]{\texttt{\scriptsize c17db3fa3816f9908ccf6d0546558489}\\\texttt{\scriptsize 5f0ad69e756e1c274fd3cdb0954b0c06}} \\
-\code{code/qiju/**/*.py}（43 个） & \makecell[l]{\texttt{\scriptsize b899993aef6b6d10ec5075f568605510}\\\texttt{\scriptsize baefd982047e373b99480fa286ef5f73}} \\
+\code{chat.txt} & \texttt{\scriptsize 21c7e7e49a5cea4fa85488734771e13d} & \texttt{\scriptsize 00062c393ab2eff95e4ed3300b2ce585} \\
+\code{UML/*.puml}（7 个） & \texttt{\scriptsize c17db3fa3816f9908ccf6d0546558489} & \texttt{\scriptsize 5f0ad69e756e1c274fd3cdb0954b0c06} \\
+\code{code/qiju/**/*.py}（43 个） & \texttt{\scriptsize b899993aef6b6d10ec5075f568605510} & \texttt{\scriptsize baefd982047e373b99480fa286ef5f73} \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -998,9 +1018,19 @@ $ python -m pytest
   \item \textbf{演示数据是固定的。}账号密码、邀请码写在 \code{seed.py} 里，方便课堂演示；真实部署必须去掉演示账号、强制首次改密。
 \end{enumerate}
 
-\subsection{如果再做一次}
+\subsection{后续改进项}
 
-如果还有一周，我会按这个顺序补：先给 UI 加 3 条关键路径的冒烟测试（下单、确认、取消），再把 \code{seed.py} 换成可配置的测试数据工厂，最后用 Locust 对 \code{hold} 做一次 50 并发压测。前两件是“防止改坏”，第三件是“知道极限在哪”。功能上反而没有特别想加的——34 条需求里该做的都做了，剩下的都是环境与验证，而不是代码。
+按优先级排列：
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt,topsep=2pt]
+  \item 为 UI 关键路径补冒烟测试（下单、确认、取消），降低界面改动带来的回归风险；
+  \item 将 \code{seed.py} 改为可配置的测试数据工厂，支持不同规模、边界日期与异常数据；
+  \item 用 Locust 对 \code{hold} 做 50 并发压测，记录吞吐与 P95，区分“逻辑正确”与“性能达标”；
+  \item 将 SQLite 替换为 PostgreSQL，验证条件 \code{UPDATE} 在行锁下的行为，补 \req{REQ-020}/\req{REQ-022} 的测试；
+  \item 将 PBKDF2 替换为 Argon2id，补 TLS、会话超时与数据库层日志权限。
+\end{enumerate}
+
+34 条功能需求均已在代码中落地；剩余工作集中在验证环境、性能测试与安全加固，而不是新增功能。
 
 % ==================== 附录 ====================
 \newpage
@@ -1056,7 +1086,7 @@ AI-06 & L001--L017 & 幂等：order\_no 做键、2 小时窗口 & 4.2、2.4 \\
 AI-07 & L001--L015 & 报表：总价求和当成交额 & 4.2、2.6 \\
 AI-08 & L001--L016 & 界面：正数字号、pack\_propagate & 4.3.4、2.9 \\
 AI-09 & L001--L016 & 测试：10 线程、共用 request\_id & 4.2、3.2 \\
-AI-10 & L001--L016 & 报告：编造指标、把 7 写成 8 & 4.2、3.3 \\
+AI-10 & L001--L016 & 交付材料：无依据指标、把 7 写成 8 & 4.2、3.3 \\
 CHK & 全部 & 16 项人工审查 & 4.4 \\
 \bottomrule
 \end{tabularx}
