@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+.venv/
+venv/
+
+# 运行时数据
+*.db
+*.db-wal
+*.db-shm
+qiju.db*
+
+# LaTeX 中间产物（PDF 随压缩包提交，不入库）
+report/*.aux
+report/*.log
+report/*.out
+report/*.toc
+report/*.synctex.gz
+实验报告.pdf
+
+# 系统
+.DS_Store
+Thumbs.db
