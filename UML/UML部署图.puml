@@ -1,0 +1,45 @@
+@startuml
+' 图 3-7 部署图：单机桌面 + 本地 SQLite + 备份/导出
+!pragma layout smetana
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam node {
+  BackgroundColor #FCFAF5
+  BorderColor #2C5F55
+  FontColor #17332C
+  FontSize 11
+}
+skinparam artifact {
+  BackgroundColor #FFFFFF
+  BorderColor #A9BFB7
+}
+skinparam database {
+  BackgroundColor #F3F6F4
+  BorderColor #2C5F55
+}
+
+node "顾客 / 前台 / 店长 / 管理员\nWindows / macOS / Linux" as PC {
+  artifact "栖居桌面客户端\npython run.py" as APP
+  database "qiju.db\nSQLite (WAL)\n单文件" as DB
+  folder "导出\noperation_logs.csv" as CSV
+}
+
+node "备份介质\n（手工/脚本）" as BACKUP {
+  artifact "qiju.db 副本" as COPY
+}
+
+APP --> DB : sqlite3（单连接 + RLock）
+APP --> CSV : utf-8-sig
+DB ..> COPY : 定时复制（本期手工）
+note right of PC
+  本期不部署应用服务器与
+  独立数据库：客户端内含
+  界面、服务与仓储三层。
+  并发能力受单写者限制，
+  见报告 7.2 的不足。
+end note
+
+@enduml

@@ -1,0 +1,54 @@
+@startuml
+' 图 3-6 确认与超时并发：同一订单只允许一个终态
+!pragma layout smetana
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam sequence {
+  ArrowColor #2C5F55
+  ActorBorderColor #2C5F55
+  LifeLineBorderColor #B9C9C2
+  LifeLineBackgroundColor #F3F7F5
+  ParticipantBorderColor #2C5F55
+  ParticipantBackgroundColor #EAF2EE
+  ParticipantFontColor #123F36
+  FontSize 10
+}
+skinparam note {
+  BackgroundColor #FFF9EA
+  BorderColor #E0C98F
+  FontSize 9
+}
+autonumber
+
+actor "前台" as F
+participant "订单服务\nOrderService" as SVC
+participant "调度任务\nSchedulerService" as JOB
+database "SQLite（订单表）" as DB
+
+F -> SVC : confirm(order_no)
+JOB -> SVC : timeout_cancel(order)
+SVC -> DB : 读取订单（status=PENDING, version=v）
+JOB -> DB : 读取同一订单（version=v）
+SVC -> DB : 库存复核（stop_sale / sold<=total）
+alt 库存复核通过
+  SVC -> DB : UPDATE orders SET status=CONFIRMED,\nversion=v+1 WHERE id=? AND version=v
+  DB --> SVC : rowcount=1
+  SVC -> DB : INSERT operation_logs / notifications
+  SVC --> F : 200 已确认
+  JOB -> DB : UPDATE ... WHERE version=v
+  DB --> JOB : rowcount=0
+  JOB --> JOB : 抛 409 STATE_CONFLICT\n（本轮跳过，订单已是终态）
+else 库存不足/已停售
+  SVC --> F : 409，只能拒绝
+end
+
+note over SVC, DB
+  乐观锁保证后提交者拿到 0 行；
+  SQLite 单写者 + RLock 只是把
+  冲突概率降到 0，CAS 仍是
+  换库后必须保留的语义。
+end note
+
+@enduml

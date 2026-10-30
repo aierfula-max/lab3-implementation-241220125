@@ -1,0 +1,73 @@
+@startuml
+' 图 3-5 提交预订：幂等 → 重复确认 → 逐晚扣减 → 同事务提交
+!pragma layout smetana
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam sequence {
+  ArrowColor #2C5F55
+  ActorBorderColor #2C5F55
+  LifeLineBorderColor #B9C9C2
+  LifeLineBackgroundColor #F3F7F5
+  ParticipantBorderColor #2C5F55
+  ParticipantBackgroundColor #EAF2EE
+  ParticipantFontColor #123F36
+  FontSize 10
+}
+skinparam note {
+  BackgroundColor #FFF9EA
+  BorderColor #E0C98F
+  FontSize 9
+}
+autonumber
+
+actor "顾客" as C
+participant "下单界面\nBookingDialog" as UI
+participant "预订服务\nBookingService" as BOOK
+participant "订单仓储\nOrderRepository" as ORD
+participant "库存仓储\nInventoryRepository" as INV
+database "SQLite" as DB
+
+C -> UI : 填间数、入住人，提交
+UI -> BOOK : create_order(session, request)
+activate BOOK
+BOOK -> BOOK : 校验手机号/日期/人数/间数
+BOOK -> ORD : by_request(user_id, request_id)
+alt 幂等键已存在
+  ORD --> BOOK : 原订单
+  BOOK --> UI : 返回原订单（库存不再扣）
+else 首次请求
+  BOOK -> ORD : duplicate_candidates(2 分钟内)
+  alt 内容相同且未勾选“仍然创建”
+    BOOK --> UI : 409 DUPLICATE_ORDER
+    note right of UI
+      弹窗让顾客二次确认；
+      确认后带 confirm_duplicate=True 重提。
+    end note
+  else 无重复 / 已确认
+    group 同一事务（BEGIN IMMEDIATE）
+      BOOK -> INV : ensure(房型, 每晚, 默认库存/基准价)
+      loop 每一晚
+        BOOK -> INV : hold(房型, day, 间数)
+        INV -> DB : UPDATE ... WHERE sold+n<=total\nAND stop_sale=0
+        DB --> INV : rowcount（0 = 售罄）
+        alt rowcount = 0
+          INV --> BOOK : False
+          BOOK -> DB : ROLLBACK
+          BOOK --> UI : 409 SOLD_OUT（整单未创建）
+        end
+      end
+      BOOK -> BOOK : build_nights(每晚价格快照)
+      BOOK -> ORD : add(order + nights + guests)
+      BOOK -> DB : INSERT order_nights / guests
+      BOOK -> DB : INSERT operation_logs
+      BOOK -> DB : COMMIT
+    end
+    BOOK --> UI : 201 订单（PENDING）
+    UI --> C : 显示订单号与确认截止时间
+  end
+end
+deactivate BOOK
+
+@enduml

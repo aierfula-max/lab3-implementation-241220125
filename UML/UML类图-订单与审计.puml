@@ -1,0 +1,157 @@
+@startuml
+' 图 3-2 订单与审计类图（实现版）
+!pragma layout smetana
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 6
+skinparam classAttributeIconSize 0
+hide circle
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #A9BFB7
+  HeaderBackgroundColor #EAF2EE
+  HeaderFontColor #123F36
+  FontColor #22302B
+  AttributeFontSize 10
+}
+skinparam package {
+  BackgroundColor #FCFAF5
+  BorderColor #D9D1C0
+  FontColor #6B5B3E
+  FontSize 12
+}
+skinparam note {
+  BackgroundColor #FFF9EA
+  BorderColor #E0C98F
+  FontSize 9
+}
+left to right direction
+
+package "订单与履约" as P4 {
+  class "订单\nOrder" as Order {
+    - order_no : str
+    - user_id : str
+    - hotel_id : str
+    - room_type_id : str
+    - check_in : date
+    - check_out : date
+    - room_count : int
+    - status : OrderStatus
+    - total_cents : int
+    - request_id : str
+    - confirm_deadline : datetime
+    - version : int
+    - modified : bool
+    - actual_check_out : date?
+    + stay_dates : list[date]
+    + nights_count : int
+  }
+  class "每晚明细\nOrderNight" as OrderNight {
+    - day : date
+    - price_cents : int
+    - room_count : int
+    - subtotal_cents : int
+  }
+  class "入住人\nGuest" as Guest {
+    - name : str
+    - phone : str
+    + masked_phone : str
+  }
+  class "订单变更\nOrderChange" as OrderChange {
+    - before_summary : str
+    - after_summary : str
+    - diff_cents : int
+    - operator_id : str
+  }
+  class "退款记录\nRefundRecord" as RefundRecord {
+    - refund_no : str
+    - event_type : str
+    - refundable_cents : int
+    - deducted_cents : int
+    - status : RefundStatus
+  }
+}
+
+package "审计" as P5 {
+  class "操作日志\nOperationLog" as OperationLog {
+    - actor_id : str?
+    - actor_role : str
+    - action : str
+    - object_type : str
+    - object_id : str
+    - before_value : str
+    - after_value : str
+    - reason : str
+    - request_id : str
+  }
+}
+
+class "状态机\norder_state" as OrderState <<module>> {
+  + TRANSITIONS : 7 条
+  + ensure_actor(src, dst, role)
+}
+class "退款口径\ncancellation" as Cancellation <<module>> {
+  + cancel_quote(order, now, reason)
+  + no_show_quote(order)
+  + early_checkout_quote(order, day)
+}
+class "定价\npricing" as Pricing <<module>> {
+  + build_nights(days, prices, n)
+  + total_of(nights) : int
+}
+
+enum "订单状态\nOrderStatus" as OrderStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  COMPLETED
+  CANCELED
+  REJECTED
+  NO_SHOW
+}
+enum "退款状态\nRefundStatus" as RefundStatus {
+  PENDING_OFFLINE
+  REFUNDED
+}
+enum "拒绝原因\nRejectReason" as RejectReason {
+  无房 / 设备故障
+  价格错误 / 其他
+}
+
+class "用户\nUser" as User <<引用>> #F5F2EA
+class "房型\nRoomType" as RoomType <<引用>> #F5F2EA
+class "每日库存\nDailyInventory" as DailyInventory <<引用>> #F5F2EA
+hide User members
+hide RoomType members
+hide DailyInventory members
+
+Order "1" *-- "1..*" OrderNight : 每晚明细
+Order "1" *-- "1..*" Guest : 入住人
+Order "1" -- "0..*" RefundRecord : 退款事件
+Order "1" -- "0..*" OrderChange : 改单记录
+Order --> OrderStatus : 当前状态
+Order "0..*" --> "1" User : 下单
+Order "0..*" --> "1" RoomType : 预订
+OrderNight "0..*" --> "1" DailyInventory : 对应日库存
+OperationLog "0..*" --> "0..1" User : 操作人
+Order --> RejectReason : 拒绝原因
+RefundRecord --> RefundStatus : 状态
+OrderState ..> Order : 校验转换
+Cancellation ..> Order : 计算退款
+Pricing ..> OrderNight : 生成明细
+
+note right of Order
+  version 乐观锁：确认与超时
+  并发提交时后到者 409。
+  (user_id, request_id) 唯一，
+  重放返回原订单。
+end note
+
+note bottom of OrderNight
+  总价 = 每晚小计之和；
+  明细是唯一真值，改价不回写。
+end note
+
+@enduml

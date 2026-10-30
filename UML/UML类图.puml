@@ -1,0 +1,130 @@
+@startuml
+' 图 3-1 基础数据类图（实现版，对应 User/Hotel/RoomType/Inventory）
+!pragma layout smetana
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 6
+skinparam classAttributeIconSize 0
+hide circle
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #A9BFB7
+  HeaderBackgroundColor #EAF2EE
+  HeaderFontColor #123F36
+  FontColor #22302B
+  AttributeFontSize 10
+}
+skinparam package {
+  BackgroundColor #FCFAF5
+  BorderColor #D9D1C0
+  FontColor #6B5B3E
+  FontSize 12
+}
+skinparam note {
+  BackgroundColor #FFF9EA
+  BorderColor #E0C98F
+  FontSize 9
+}
+left to right direction
+
+package "用户与权限" as P1 {
+  class "用户\nUser" as User {
+    - id : str
+    - phone : str
+    - password_hash : str
+    - role : Role
+    - status : UserStatus
+    - hotel_id : str?
+    + is_active : bool
+  }
+  class "邀请码\nInvitationCode" as InvitationCode {
+    - code : str
+    - hotel_id : str
+    - expires_at : datetime
+    - used_by : str?
+    + is_valid(now) : bool
+  }
+}
+
+package "酒店与房型" as P2 {
+  class "酒店\nHotel" as Hotel {
+    - id : str
+    - name : str
+    - city : str
+    - phone : str
+    - audit_status : AuditStatus
+    - business_status : BusinessStatus
+    - pending_profile : str
+    + is_bookable() : bool
+  }
+  class "房型\nRoomType" as RoomType {
+    - id : str
+    - hotel_id : str
+    - name : str
+    - capacity : int
+    - total_rooms : int
+    - base_price_cents : int
+    - on_sale : bool
+  }
+}
+
+package "库存与价格" as P3 {
+  class "每日库存\nDailyInventory" as DailyInventory {
+    - room_type_id : str
+    - day : date
+    - total_rooms : int
+    - sold_rooms : int
+    - price_cents : int
+    - stop_sale : bool
+    + remaining : int
+  }
+  class "停售规则\nStopSaleRule" as StopSaleRule {
+    - start_date : date
+    - end_date : date
+    + covers(day) : bool
+  }
+}
+
+class "确认时限\nConfirmPolicy" as ConfirmPolicy {
+  - hotel_id : str
+  - timeout_minutes : int
+}
+
+enum "角色\nRole" as Role {
+  CUSTOMER
+  FRONT_DESK
+  MANAGER
+  PLATFORM_ADMIN
+  SYSTEM
+}
+
+Hotel "1" -- "0..*" User : 所属员工
+Hotel "1" -- "0..*" RoomType : 拥有
+Hotel "1" -- "0..*" InvitationCode : 绑定
+Hotel "1" -- "0..1" ConfirmPolicy : 确认时限
+RoomType "1" -- "0..*" DailyInventory : 按日维护
+RoomType "1" -- "0..*" StopSaleRule : 按段停售
+User --> Role : 角色
+
+note right of Hotel
+  首次审核用 audit_status；
+  上架后的关键资料变更存
+  pending_profile，审核期间
+  仍展示旧值、照常接单。
+end note
+
+note bottom of DailyInventory
+  hold = 带条件的 UPDATE：
+  sold_rooms + n <= total_rooms
+  且 stop_sale = 0，0 行即售罄。
+end note
+
+note bottom of ConfirmPolicy
+  下单时把 now + timeout
+  写进 order.confirm_deadline，
+  改配置只影响新订单。
+end note
+
+@enduml

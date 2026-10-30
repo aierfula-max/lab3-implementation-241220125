@@ -1,0 +1,65 @@
+@startuml
+' 图 3-4 订单状态机（实现版）：7 状态 / 7 条允许转换
+!pragma layout smetana
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam state {
+  BackgroundColor #FFFFFF
+  BorderColor #2C5F55
+  FontColor #17332C
+  FontSize 11
+  AttributeFontSize 10
+}
+skinparam note {
+  BackgroundColor #FFF9EA
+  BorderColor #E0C98F
+  FontSize 9
+}
+
+state "待确认\nPENDING" as PENDING
+state "已确认\nCONFIRMED" as CONFIRMED
+state "已入住\nCHECKED_IN" as CHECKED_IN
+state "已完成\nCOMPLETED" as COMPLETED
+state "已取消\nCANCELED" as CANCELED
+state "已拒绝\nREJECTED" as REJECTED
+state "未入住关闭\nNO_SHOW" as NO_SHOW
+
+[*] --> PENDING : 下单成功（逐晚 hold 已提交）
+PENDING --> CONFIRMED : 确认 [库存复核通过]\n前台 / 店长
+PENDING --> REJECTED : 拒绝 [原因四选一，其他需说明]\n前台 / 店长
+PENDING --> CANCELED : 顾客取消 / 确认超时\n顾客 / 系统任务
+CONFIRMED --> CHECKED_IN : 办理入住 [入住日；提前需店长]\n前台 / 店长
+CONFIRMED --> CANCELED : 顾客取消（18:00 规则）\n酒店停业 / 管理员强制
+CONFIRMED --> NO_SHOW : 入住日 24:00 未入住\n系统任务
+CHECKED_IN --> COMPLETED : 办理退房 [提前退房需店长]\n前台 / 店长
+COMPLETED --> [*]
+CANCELED --> [*]
+REJECTED --> [*]
+NO_SHOW --> [*]
+
+note right of PENDING
+  进入时库存已逐晚占用；
+  进入 CANCELED/REJECTED 时全部释放。
+end note
+
+note bottom of CONFIRMED
+  并发保护：version 乐观锁，
+  确认与超时同时提交时，
+  后提交者返回 409。
+end note
+
+note right of NO_SHOW
+  首晚不退，只释放入住日之后；
+  不可恢复为已确认/已入住。
+end note
+
+note bottom of COMPLETED
+  正常退房不释放库存；
+  提前退房释放退房日当晚至
+  原退房日前一晚的未住间夜。
+end note
+
+@enduml

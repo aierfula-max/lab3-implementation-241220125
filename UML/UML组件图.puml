@@ -1,0 +1,58 @@
+@startuml
+' 图 3-3 组件图：桌面进程内的分层与依赖方向
+!pragma layout smetana
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam componentStyle rectangle
+skinparam component {
+  BackgroundColor #FFFFFF
+  BorderColor #2C5F55
+  FontColor #17332C
+  FontSize 11
+}
+skinparam database {
+  BackgroundColor #F3F6F4
+  BorderColor #2C5F55
+}
+skinparam note {
+  BackgroundColor #FFF9EA
+  BorderColor #E0C98F
+  FontSize 9
+}
+
+package "桌面进程（python run.py）" as PROC {
+  component "界面层 ui/\n登录 · 顾客 · 商家 · 平台\nTkinter / ttk" as UI
+  component "应用服务 application/\nAuth / Hotel / Inventory / Booking\nOrder / Report / Audit / Scheduler" as APP
+  component "领域规则 domain/\n实体 / 状态机 / 定价 / 取消口径 / 校验" as DOM
+  component "仓储与基础设施 infrastructure/\nRepositories / Database / Security / Seed" as DAL
+  database "qiju.db\nSQLite（WAL 模式）" as DB
+}
+
+component "CSV 导出\nlogs_*.csv" as CSV
+component "站内信\nnotifications 表" as MSG
+
+UI --> APP : 调用用例
+APP --> DOM : 规则判断
+APP --> DAL : 仓储端口
+DAL --> DB : SQL / BEGIN IMMEDIATE
+APP --> CSV : 导出动作
+APP --> MSG : 状态变更通知
+
+note right of APP
+  一个用例一个事务：
+  改库存、写订单、写退款、
+  写日志同事务提交。
+end note
+
+note bottom of DB
+  单连接 + 可重入锁 +
+  BEGIN IMMEDIATE：
+  进程内串行写，等价于
+  “整库行锁”；多节点部署
+  需换 PostgreSQL。
+end note
+
+@enduml
