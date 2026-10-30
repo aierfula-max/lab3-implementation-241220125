@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from .errors import ValidationError
 
 PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+CONTACT_RE = re.compile(r"^[0-9+\-\s]{7,20}$")
 MAX_NIGHTS = 30
 MAX_ROOM_COUNT = 20
 
@@ -21,6 +22,14 @@ def validate_phone(phone: str, *, field: str = "手机号") -> str:
     value = (phone or "").strip()
     if not PHONE_RE.match(value):
         raise ValidationError(f"{field}格式不正确，应为 11 位手机号")
+    return value
+
+
+def validate_contact_phone(phone: str, *, field: str = "联系电话") -> str:
+    """酒店联系电话：允许座机（02586661234）与带区号/分机的写法。"""
+    value = (phone or "").strip()
+    if not CONTACT_RE.match(value):
+        raise ValidationError(f"{field}格式不正确，应为 7–20 位数字、空格、+ 或 -")
     return value
 
 

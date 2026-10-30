@@ -15,7 +15,11 @@ from datetime import date
 from ..domain.entities import ConfirmPolicy, Hotel, RoomType, new_id
 from ..domain.enums import AuditAction, AuditStatus, BusinessStatus, Role
 from ..domain.errors import Conflict, NotFound, ValidationError
-from ..domain.validation import validate_name, validate_phone, validate_timeout_minutes
+from ..domain.validation import (
+    validate_contact_phone,
+    validate_name,
+    validate_timeout_minutes,
+)
 from .base import BaseService, Session
 
 
@@ -67,7 +71,7 @@ class HotelService(BaseService):
             "name": validate_name(name, field="酒店名称"),
             "city": validate_name(city, field="城市"),
             "address": validate_name(address, field="地址"),
-            "phone": validate_phone(phone, field="联系电话"),
+            "phone": validate_contact_phone(phone, field="联系电话"),
             "description": description.strip(),
             "checkin_time": checkin_time.strip() or "14:00",
             "checkout_time": checkout_time.strip() or "12:00",

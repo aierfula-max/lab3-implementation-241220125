@@ -8,7 +8,11 @@ from ..domain.clock import iso
 from ..domain.entities import Hotel, InvitationCode, User, new_id
 from ..domain.enums import AuditAction, BusinessStatus, Role, UserStatus
 from ..domain.errors import Conflict, NotFound, ValidationError
-from ..domain.validation import validate_name, validate_phone
+from ..domain.validation import (
+    validate_contact_phone,
+    validate_name,
+    validate_phone,
+)
 from ..infrastructure.security import hash_password, verify_password
 from .base import BaseService, Session
 
@@ -179,7 +183,7 @@ class AuthService(BaseService):
             name=validate_name(name, field="酒店名称"),
             city=validate_name(city, field="城市"),
             address=validate_name(address, field="地址"),
-            phone=validate_phone(phone, field="联系电话"),
+            phone=validate_contact_phone(phone, field="联系电话"),
             business_status=BusinessStatus.SUSPENDED,
             description=description.strip(),
             created_at=self.clock.now(),
